@@ -78,26 +78,42 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential clang libclang-dev pkg-config libssl-dev \
         postgresql-server-dev-${PG_MAJOR} \
         git ca-certificates curl libreadline-dev zlib1g-dev \
-    && curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal \
-    && cargo install --locked --version ${PGRX_VERSION} cargo-pgrx \
-    && cargo pgrx init --pg${PG_MAJOR} /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+    && curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+
+# Helper — install matching cargo-pgrx for each extension's Cargo.toml.
+# `cargo-pgrx` enforces strict equality with the pgrx library version, so we
+# parse it from each crate's Cargo.toml and install the matching tool. PGRX_HOME
+# is per-extension so init artefacts don't collide between versions.
+RUN cat > /usr/local/bin/build-pgrx-extension <<'BASH' && chmod +x /usr/local/bin/build-pgrx-extension
+#!/bin/bash
+set -euo pipefail
+ext_dir="$1"
+shift
+cd "$ext_dir"
+PGRX_VER=$(awk -F'[ ="]+' '/^pgrx[[:space:]]*=/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]/) { print $i; exit } }' Cargo.toml)
+echo "=== build-pgrx-extension: $ext_dir → pgrx $PGRX_VER ==="
+cargo install --locked --version "$PGRX_VER" cargo-pgrx
+export PGRX_HOME=/root/.pgrx-$PGRX_VER
+mkdir -p "$PGRX_HOME"
+if [ ! -e "$PGRX_HOME/config.toml" ]; then
+  cargo pgrx init --pg${PG_MAJOR:-17} /usr/lib/postgresql/${PG_MAJOR:-17}/bin/pg_config
+fi
+cargo pgrx install --release --pg-config /usr/lib/postgresql/${PG_MAJOR:-17}/bin/pg_config "$@"
+BASH
 
 # pg_graphql
 RUN git clone --depth=1 --branch v${PG_GRAPHQL_VERSION} https://github.com/supabase/pg_graphql.git /tmp/pg_graphql \
-    && cd /tmp/pg_graphql \
-    && cargo pgrx install --release --pg-config /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+    && PG_MAJOR=${PG_MAJOR} build-pgrx-extension /tmp/pg_graphql
 
 # pg_jsonschema
 RUN git clone --depth=1 --branch v${PG_JSONSCHEMA_VERSION} https://github.com/supabase/pg_jsonschema.git /tmp/pg_jsonschema \
-    && cd /tmp/pg_jsonschema \
-    && cargo pgrx install --release --pg-config /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config
+    && PG_MAJOR=${PG_MAJOR} build-pgrx-extension /tmp/pg_jsonschema
 
 # wrappers (Foreign Data Wrappers — Stripe, Firebase, S3, …)
 RUN git clone --depth=1 --branch v${WRAPPERS_VERSION} https://github.com/supabase/wrappers.git /tmp/wrappers \
-    && cd /tmp/wrappers/wrappers \
-    && cargo pgrx install --release --pg-config /usr/lib/postgresql/${PG_MAJOR}/bin/pg_config --features all_fdws
+    && PG_MAJOR=${PG_MAJOR} build-pgrx-extension /tmp/wrappers/wrappers --features all_fdws
 
-# pg_net (async HTTP from PG)
+# pg_net (async HTTP from PG) — plain make build, not pgrx
 RUN git clone --depth=1 --branch v${PG_NET_VERSION} https://github.com/supabase/pg_net.git /tmp/pg_net \
     && cd /tmp/pg_net \
     && make PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config \
