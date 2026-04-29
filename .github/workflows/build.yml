@@ -1,0 +1,148 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          # multi-stage build is heavy — purge unused tooling on the runner
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          docker system prune -af || true
+          df -h
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=17,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+            type=sha,prefix=sha-
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          # ARM64 build through QEMU is ~3x slower; start with amd64 only,
+          # add arm64 once the recipe is stable.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            CNPG_BASE=ghcr.io/cloudnative-pg/postgresql:17
+            PG_MAJOR=17
+            PGVECTORSCALE_VERSION=0.9.0
+          provenance: true
+          sbom: true
+
+  smoke:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run smoke test on full extension set
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-$(echo ${{ github.sha }} | cut -c1-7)"
+          docker pull "$IMAGE"
+
+          # Pre-load every shared library that requires shared_preload_libraries.
+          docker run --rm -d --name pg-smoke \
+            -e POSTGRES_PASSWORD=smoke -e POSTGRES_DB=smoke \
+            "$IMAGE" \
+            postgres \
+              -c shared_preload_libraries='timescaledb,pg_cron,pg_stat_kcache,pg_stat_monitor,pgaudit,supautils,pgsodium' \
+              -c cron.database_name=smoke
+
+          for i in $(seq 1 60); do
+            if docker exec pg-smoke pg_isready -U postgres 2>/dev/null; then break; fi
+            sleep 2
+          done
+
+          # Full extension set per supabase supautils.conf.j2 privileged_extensions list,
+          # minus contrib (pre-installed) and items requiring runtime data.
+          EXTS="vector vectorscale postgis postgis_raster postgis_topology postgis_tiger_geocoder \
+                pgrouting pg_cron timescaledb pgsodium pg_partman wal2json hypopg rum \
+                pg_stat_kcache pg_stat_monitor pgtap pg_repack plpgsql_check plv8 plcoffee plls \
+                http pg_hint_plan pgaudit \
+                pg_graphql pg_jsonschema wrappers pg_net \
+                pg_hashids pgjwt supabase_vault supautils pgmq \
+                btree_gin btree_gist citext cube hstore intarray ltree pg_buffercache \
+                pg_prewarm pg_stat_statements pg_trgm pg_walinspect pgcrypto postgres_fdw \
+                tablefunc tsm_system_rows tsm_system_time unaccent \"uuid-ossp\""
+
+          PASS=()
+          FAIL=()
+          for ext in $EXTS; do
+            if docker exec pg-smoke psql -U postgres -d smoke -c "CREATE EXTENSION IF NOT EXISTS $ext CASCADE;" >/dev/null 2>&1; then
+              PASS+=("$ext")
+            else
+              FAIL+=("$ext")
+            fi
+          done
+
+          echo "=== PASS (${#PASS[@]}) ==="
+          printf '  %s\n' "${PASS[@]}"
+          echo "=== FAIL (${#FAIL[@]}) ==="
+          printf '  %s\n' "${FAIL[@]}"
+
+          docker logs pg-smoke 2>&1 | tail -100
+          docker stop pg-smoke
+
+          # Soft gate: report failures but do not break build (first iteration —
+          # we expect some extensions to need follow-up fixes). Tighten in v0.2.
+          if [ ${#FAIL[@]} -gt 5 ]; then
+            echo "::error::More than 5 extensions failed to load — build fails"
+            exit 1
+          fi
