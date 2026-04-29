@@ -27,17 +27,17 @@
 ARG CNPG_BASE=ghcr.io/cloudnative-pg/postgresql:17-bookworm
 ARG PG_MAJOR=17
 ARG PGVECTORSCALE_VERSION=0.9.0
-ARG PG_GRAPHQL_VERSION=1.5.11
-ARG PG_JSONSCHEMA_VERSION=0.3.3
-ARG WRAPPERS_VERSION=0.5.5
-ARG PG_NET_VERSION=0.13.0
+ARG PG_GRAPHQL_VERSION=1.5.9
+ARG PG_JSONSCHEMA_VERSION=0.3.4
+ARG WRAPPERS_VERSION=0.6.0
+ARG PG_NET_VERSION=0.9.3
 ARG PG_HASHIDS_VERSION=cd0e1b31d52b394a0df64079406a14a4f7387cd6
 # pgjwt has no tags — track master HEAD. Pin can be tightened later by replacing
 # with a verified commit SHA from `git ls-remote https://github.com/michelp/pgjwt.git HEAD`.
 ARG PGJWT_VERSION=master
 ARG SUPABASE_VAULT_VERSION=0.3.1
-ARG SUPAUTILS_VERSION=2.7.5
-ARG PGMQ_VERSION=1.5.1
+ARG SUPAUTILS_VERSION=3.2.2
+ARG PGMQ_VERSION=1.9.0
 ARG PGRX_VERSION=0.12.9
 
 # ---------------------------------------------------------------------------
