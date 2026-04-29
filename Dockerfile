@@ -124,8 +124,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential git ca-certificates curl unzip \
         postgresql-server-dev-${PG_MAJOR} \
-        libcurl4-openssl-dev libssl-dev \
-        postgresql-${PG_MAJOR}-pgsodium
+        libcurl4-openssl-dev libssl-dev libsodium-dev
+
+# pgsodium (build from source — not packaged in PGDG bookworm for PG 17)
+ARG PGSODIUM_VERSION=3.1.9
+RUN git clone --depth=1 --branch v${PGSODIUM_VERSION} https://github.com/michelp/pgsodium.git /tmp/pgsodium \
+    && cd /tmp/pgsodium \
+    && make PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config \
+    && make PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config install \
+    && make PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config install DESTDIR=/out/pgsodium
 
 # pg_hashids
 RUN git clone https://github.com/iCyberon/pg_hashids.git /tmp/pg_hashids \
@@ -182,42 +189,54 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -f /tmp/groonga.deb \
     && apt-get update
 
-# 2. Apt extensions (PGDG + Timescale + groonga).
-#    `|| true` guards entries that may not be packaged for trixie yet — those will be
-#    revisited via build-from-source if missing.
+# 2. Apt extensions — robust per-package install.
+#    PGDG bookworm coverage for PG 17 is uneven. Install each package individually:
+#    success → keep, failure → log WARN and continue. End of stage prints a summary
+#    so the smoke job can see what landed.
+#    Required runtime libs (libsodium for pgsodium .so, plus net/utility libs).
 RUN apt-get install -y --no-install-recommends \
-        # Geospatial
+        libsodium23 libcurl4 \
+    || (echo "FATAL: required runtime libs missing" && exit 1)
+
+# Critical apt packages — must succeed. Fail the build if any is missing because
+# downstream functionality (geospatial, time-series, scheduling, vector-distance) depends on it.
+RUN set -e; \
+    for pkg in \
         postgresql-${PG_MAJOR}-postgis-3 \
         postgresql-${PG_MAJOR}-postgis-3-scripts \
-        postgresql-${PG_MAJOR}-pgrouting \
-        # Time series
-        timescaledb-2-postgresql-${PG_MAJOR} \
-        # Scheduling / partitioning
         postgresql-${PG_MAJOR}-cron \
         postgresql-${PG_MAJOR}-partman \
-        # Crypto / vault prereq
-        postgresql-${PG_MAJOR}-pgsodium \
-        # Logical replication / CDC
         postgresql-${PG_MAJOR}-wal2json \
-        # Query planning / statistics
         postgresql-${PG_MAJOR}-hypopg \
+        postgresql-${PG_MAJOR}-pgaudit \
+        postgresql-${PG_MAJOR}-repack \
+        postgresql-plpython3-${PG_MAJOR} \
+        timescaledb-2-postgresql-${PG_MAJOR}; \
+    do \
+        echo "=== apt install (required) $pkg ==="; \
+        apt-get install -y --no-install-recommends "$pkg"; \
+    done
+
+# Optional apt packages — install if available, log WARN otherwise. The smoke
+# test will reveal which extensions are missing in the final image.
+RUN for pkg in \
+        postgresql-${PG_MAJOR}-pgrouting \
         postgresql-${PG_MAJOR}-rum \
         postgresql-${PG_MAJOR}-pg-stat-kcache \
         postgresql-${PG_MAJOR}-pg-stat-monitor \
         postgresql-${PG_MAJOR}-pg-hint-plan \
-        # Quality / debug
         postgresql-${PG_MAJOR}-pgtap \
-        postgresql-${PG_MAJOR}-repack \
         postgresql-${PG_MAJOR}-plpgsql-check \
-        # Procedural langs
-        postgresql-plpython3-${PG_MAJOR} \
         postgresql-${PG_MAJOR}-plv8 \
-        # HTTP / utility
         postgresql-${PG_MAJOR}-http \
-    # Optional packages — install if available, otherwise skip (will be addressed in source build).
-    && apt-get install -y --no-install-recommends \
-        postgresql-${PG_MAJOR}-pgroonga \
-        || echo "WARN: postgresql-${PG_MAJOR}-pgroonga not in apt — will not be present"
+        postgresql-${PG_MAJOR}-pgroonga; \
+    do \
+        if apt-get install -y --no-install-recommends "$pkg" 2>/dev/null; then \
+            echo "OK: $pkg"; \
+        else \
+            echo "WARN: $pkg not available — skipping"; \
+        fi; \
+    done
 
 # 3. orioledb is installed via dedicated apt repo (orioletech) when available;
 #    skipped if not packaged for the target arch.
@@ -240,11 +259,13 @@ COPY --from=pgvectorscale-extract /out/usr/share/postgresql/ /usr/share/postgres
 COPY --from=rust-builder /artifacts/lib/    /usr/lib/postgresql/${PG_MAJOR}/lib/
 COPY --from=rust-builder /artifacts/share/  /usr/share/postgresql/${PG_MAJOR}/extension/
 
-# 7. C / PL/pgSQL extensions
+# 7. C / PL/pgSQL extensions (pgsodium built from source — required for supabase_vault)
+COPY --from=c-builder /out/pgsodium/usr/   /usr/
 COPY --from=c-builder /out/hashids/usr/    /usr/
 COPY --from=c-builder /out/pgjwt/usr/      /usr/
 COPY --from=c-builder /out/vault/usr/      /usr/
 COPY --from=c-builder /out/supautils/usr/  /usr/
+COPY --from=c-builder /out/pgmq/usr/       /usr/
 COPY --from=c-builder /out/pgmq/usr/       /usr/
 
 # 8. Sanity — list installed extension control files for build-time visibility.
