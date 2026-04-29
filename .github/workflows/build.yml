@@ -97,18 +97,29 @@ jobs:
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-$(echo ${{ github.sha }} | cut -c1-7)"
           docker pull "$IMAGE"
 
-          # Pre-load every shared library that requires shared_preload_libraries.
+          # Minimal shared_preload_libraries — supautils + pgsodium need runtime config
+          # (privileged_extensions list, getkey script) that's not provided in this raw
+          # smoke environment; CNPG operator wires these in production via Cluster.spec
+          # postgresql.parameters. Smoke just verifies extensions are *loadable*.
           docker run --rm -d --name pg-smoke \
             -e POSTGRES_PASSWORD=smoke -e POSTGRES_DB=smoke \
             "$IMAGE" \
             postgres \
-              -c shared_preload_libraries='timescaledb,pg_cron,pg_stat_kcache,pg_stat_monitor,pgaudit,supautils,pgsodium' \
+              -c shared_preload_libraries='timescaledb,pg_cron,pg_stat_kcache,pg_stat_monitor,pgaudit' \
               -c cron.database_name=smoke
 
           for i in $(seq 1 60); do
             if docker exec pg-smoke pg_isready -U postgres 2>/dev/null; then break; fi
             sleep 2
           done
+
+          # If container died, surface logs
+          if ! docker exec pg-smoke pg_isready -U postgres >/dev/null 2>&1; then
+            echo "::error::pg-smoke container failed to become ready"
+            docker ps -a --filter name=pg-smoke
+            docker logs pg-smoke 2>&1 | tail -80 || true
+            exit 1
+          fi
 
           # Full extension set per supabase supautils.conf.j2 privileged_extensions list,
           # minus contrib (pre-installed) and items requiring runtime data.
