@@ -24,7 +24,7 @@
 #   pgrx build:   pg_graphql, pg_jsonschema, wrappers, pg_net (Rust)
 #   make build:   pg_hashids, pgjwt, supabase_vault, supautils, pgmq
 
-ARG CNPG_BASE=ghcr.io/cloudnative-pg/postgresql:17
+ARG CNPG_BASE=ghcr.io/cloudnative-pg/postgresql:17-bookworm
 ARG PG_MAJOR=17
 ARG PGVECTORSCALE_VERSION=0.9.0
 ARG PG_GRAPHQL_VERSION=1.5.11
@@ -58,7 +58,7 @@ RUN apt-get update \
 # ---------------------------------------------------------------------------
 # Stage 2 — Rust + cargo-pgrx builder for Supabase Rust extensions
 # ---------------------------------------------------------------------------
-FROM ghcr.io/cloudnative-pg/postgresql:17 AS rust-builder
+FROM ghcr.io/cloudnative-pg/postgresql:17-bookworm AS rust-builder
 ARG PG_MAJOR
 ARG PGRX_VERSION
 ARG PG_GRAPHQL_VERSION
@@ -111,7 +111,7 @@ RUN mkdir -p /artifacts/lib /artifacts/share \
 # ---------------------------------------------------------------------------
 # Stage 3 — C / PL/pgSQL extension builder
 # ---------------------------------------------------------------------------
-FROM ghcr.io/cloudnative-pg/postgresql:17 AS c-builder
+FROM ghcr.io/cloudnative-pg/postgresql:17-bookworm AS c-builder
 ARG PG_MAJOR
 ARG PG_HASHIDS_VERSION
 ARG PGJWT_VERSION

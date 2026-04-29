@@ -74,7 +74,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            CNPG_BASE=ghcr.io/cloudnative-pg/postgresql:17
+            CNPG_BASE=ghcr.io/cloudnative-pg/postgresql:17-bookworm
             PG_MAJOR=17
             PGVECTORSCALE_VERSION=0.9.0
           provenance: true
