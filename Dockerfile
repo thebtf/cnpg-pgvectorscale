@@ -32,7 +32,9 @@ ARG PG_JSONSCHEMA_VERSION=0.3.3
 ARG WRAPPERS_VERSION=0.5.5
 ARG PG_NET_VERSION=0.13.0
 ARG PG_HASHIDS_VERSION=cd0e1b31d52b394a0df64079406a14a4f7387cd6
-ARG PGJWT_VERSION=9742dab1b2f297ad3811120db7b21451bca2b21d
+# pgjwt has no tags — track master HEAD. Pin can be tightened later by replacing
+# with a verified commit SHA from `git ls-remote https://github.com/michelp/pgjwt.git HEAD`.
+ARG PGJWT_VERSION=master
 ARG SUPABASE_VAULT_VERSION=0.3.1
 ARG SUPAUTILS_VERSION=2.7.5
 ARG PGMQ_VERSION=1.5.1
@@ -142,9 +144,8 @@ RUN git clone https://github.com/iCyberon/pg_hashids.git /tmp/pg_hashids \
     && make PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config install DESTDIR=/out/hashids
 
 # pgjwt (PL/pgSQL only — copy SQL + control)
-RUN git clone https://github.com/michelp/pgjwt.git /tmp/pgjwt \
+RUN git clone --depth=1 --branch ${PGJWT_VERSION} https://github.com/michelp/pgjwt.git /tmp/pgjwt \
     && cd /tmp/pgjwt \
-    && git checkout ${PGJWT_VERSION} \
     && make PG_CONFIG=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config install DESTDIR=/out/pgjwt
 
 # supabase_vault (PL/pgSQL — depends on pgsodium at runtime)
