@@ -78,6 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential clang libclang-dev pkg-config libssl-dev \
         postgresql-server-dev-${PG_MAJOR} \
         git ca-certificates curl libreadline-dev zlib1g-dev \
+        libcurl4-openssl-dev \
     && curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
 
 # Helper — install matching cargo-pgrx for each extension's Cargo.toml.
